@@ -1,0 +1,4 @@
+*.out
+*.test
+/dist/
+.DS_Store
