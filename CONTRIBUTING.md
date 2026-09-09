@@ -14,7 +14,7 @@ required to build or run the fast test suite; `evmoracle` needs network
 access on its first `go mod tidy`/`go test` to fetch go-ethereum.
 
 ```bash
-git clone https://github.com/skardas/sphincsminus
+git clone https://github.com/lattice-safe/sphincsminus
 cd sphincsminus
 go build ./...
 go vet ./...

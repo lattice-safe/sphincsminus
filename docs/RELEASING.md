@@ -46,7 +46,7 @@ the usual pre-1.0 caveat:
    If it doesn't resolve within a few minutes, check
    `https://sum.golang.org` / `https://proxy.golang.org` reachability and
    that the tag was pushed to the canonical remote
-   (`github.com/skardas/sphincsminus`, module path
+   (`github.com/lattice-safe/sphincsminus`, module path
    `github.com/lattice-safe/sphincsminus`).
 5. Create the GitHub release from the pushed tag, using the matching
    `CHANGELOG.md` section as the release notes body.

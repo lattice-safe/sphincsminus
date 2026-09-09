@@ -1,6 +1,6 @@
 # sphincsminus
 
-[![CI](https://github.com/skardas/sphincsminus/actions/workflows/ci.yml/badge.svg)](https://github.com/skardas/sphincsminus/actions/workflows/ci.yml)
+[![CI](https://github.com/lattice-safe/sphincsminus/actions/workflows/ci.yml/badge.svg)](https://github.com/lattice-safe/sphincsminus/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/lattice-safe/sphincsminus.svg)](https://pkg.go.dev/github.com/lattice-safe/sphincsminus)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 

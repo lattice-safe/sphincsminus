@@ -13,7 +13,7 @@ Please **do not open a public GitHub issue** for a suspected
 vulnerability. Instead, use one of:
 
 1. **GitHub private vulnerability reporting** (preferred): open a report
-   at <https://github.com/skardas/sphincsminus/security/advisories/new>.
+   at <https://github.com/lattice-safe/sphincsminus/security/advisories/new>.
    This keeps the discussion private until a fix is ready and lets you
    coordinate a CVE/advisory if warranted.
 2. **Email**: suleyman.kardas@batman.edu.tr (maintainer's address) if you

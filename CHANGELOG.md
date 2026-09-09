@@ -47,5 +47,5 @@ Initial release.
   `runtime.GOMAXPROCS(0)` goroutines, and `Signer` caches the top-layer
   hypertree subtree across repeated `Sign` calls on the same key.
 
-[Unreleased]: https://github.com/skardas/sphincsminus/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/skardas/sphincsminus/releases/tag/v0.1.0
+[Unreleased]: https://github.com/lattice-safe/sphincsminus/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/lattice-safe/sphincsminus/releases/tag/v0.1.0
