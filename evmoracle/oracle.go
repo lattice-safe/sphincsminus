@@ -3,7 +3,7 @@
 // compatibility oracle for github.com/lattice-safe/sphincsminus's Go
 // signatures. It is a separate nested Go module purely so that the
 // (heavy) go-ethereum dependency never touches the root module's
-// go.sum (see docs/PLAN.md, Phase 3a).
+// go.sum (see evmoracle/README.md).
 //
 // The verifier bytecode itself lives under evmoracle/testdata as
 // *.bin-runtime files: the deployedBytecode.object of the upstream

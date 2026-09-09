@@ -25,16 +25,15 @@
 // use this package to protect value or safety-critical systems without an
 // independent security review appropriate to your threat model.
 //
-// # Phase status
+// # Scope
 //
-// Phases 1 and 2 are complete: parameter sets, tweakable hashes, PRFs,
-// digest/index parsing, ADRS construction, both the verify half (Verify,
-// PublicKey.Verify) and the signing half (GenerateKey,
-// NewPrivateKeyFromSeeds, DeriveKeyReference, PrivateKey.Sign, Signer) of
-// WOTS+C, FORS+C, and the hypertree. Signing is deterministic and its
-// output is byte-compatible with the reference Rust/Python signers (see
-// testdata/vectors/*.json). Not yet implemented: the EVM oracle and CLI
-// (Phase 3) and further hardening/docs (Phase 4); see docs/PLAN.md.
+// The package provides parameter sets, key generation (GenerateKey,
+// NewPrivateKeyFromSeeds, DeriveKeyReference), deterministic signing
+// (PrivateKey.Sign, PrivateKey.SignContext, Signer) and verification
+// (Verify, PublicKey.Verify) for the keccak C-series. Signing output is
+// byte-compatible with the reference Rust/Python signers and accepted by
+// the upstream Solidity verifiers (see testdata/vectors and the evmoracle
+// module). The byte-level specification lives in docs/SPEC.md.
 package sphincsminus
 
 import "errors"

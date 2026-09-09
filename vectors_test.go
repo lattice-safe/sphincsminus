@@ -121,7 +121,7 @@ func flipByte(b []byte, i int) []byte {
 	return out
 }
 
-// TestVectorsNegative runs the negative-mutation matrix from PLAN.md /
+// TestVectorsNegative runs the negative-mutation matrix from docs/SPEC.md /
 // the task brief against every reference vector: flipping any single
 // byte in a structurally meaningful region of the signature, or in the
 // message, or truncating/extending the signature, or checking the

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -247,7 +248,9 @@ func TestSignWithKeyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat %s: %v", keyPath, err)
 	}
-	if perm := info.Mode().Perm(); perm != 0600 {
+	// Windows has no POSIX permission bits (os.Stat reports 0666 or 0444),
+	// so the 0600 check is only meaningful on Unix-like systems.
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0600 {
 		t.Fatalf("keygen -out file mode = %o, want 0600", perm)
 	}
 

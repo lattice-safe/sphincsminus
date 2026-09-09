@@ -50,7 +50,7 @@ func Example_signAndVerify() {
 // (SPEC §12). This only builds the calldata bytes -- it does not execute
 // any EVM code. Actually running the compiled Solidity bytecode against
 // output like this lives in the separate evmoracle/ nested module, which
-// drives go-ethereum's EVM directly (see docs/PLAN.md).
+// drives go-ethereum's EVM directly (see evmoracle/README.md).
 func Example_solidityABI() {
 	sk, err := GenerateKey(C11)
 	if err != nil {

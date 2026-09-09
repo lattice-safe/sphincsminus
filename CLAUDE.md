@@ -7,7 +7,6 @@ byte-compatible with the Solidity verifiers in https://github.com/nconsigny/SPHI
 ## Authority
 * `docs/SPEC.md` is the byte-level spec. If code and SPEC disagree, SPEC wins;
   if SPEC and a reference vector disagree, the vector wins and SPEC must be fixed.
-* `docs/PLAN.md` is the implementation plan and phase status.
 * `testdata/vectors/*.json` are reference vectors from the upstream Rust/Python signers.
 * `evmoracle/` is a separate Go module that runs the real Solidity verifier bytecode
   (`evmoracle/testdata/*.bin-runtime`) inside go-ethereum's EVM as the final oracle.

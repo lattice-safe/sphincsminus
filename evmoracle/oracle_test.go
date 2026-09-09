@@ -133,7 +133,7 @@ func TestReferenceVectorsOnChain(t *testing.T) {
 
 // slowVariants are only exercised on-chain when SPHINCSMINUS_SLOW=1,
 // mirroring the root package's convention for the more expensive C7/C13
-// sign roundtrips (docs/PLAN.md, Phase 3a).
+// sign roundtrips.
 var slowVariants = map[string]bool{"C7": true, "C13": true}
 
 func slowEnabled() bool {

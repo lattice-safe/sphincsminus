@@ -5,7 +5,7 @@
 // print, so Foundry FFI tests can shell out to this binary instead of
 // Python (SPEC.md §12).
 //
-// See docs/SPEC.md and docs/PLAN.md (Phase 3b) in the repository root for
+// See docs/SPEC.md in the repository root for
 // the byte-level contract this CLI wraps.
 package main
 
