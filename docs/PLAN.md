@@ -165,3 +165,7 @@ in-repo sponge over the vendored Keccak-f[1600]; dropped the x/crypto dependency
 - [x] Phase 3b CLI
 - [x] Phase 4 hardening + docs
 - [x] Phase 5 perf (keccak sponge, zero deps)
+- [x] Phase 6 production hardening: `Params.Validate` bounds enforced in `Verify`/`Sign` (no panics on
+  caller-built inputs), `SignContext` cancellation, best-effort zeroization + `Signer.Zeroize`, parser fuzzers,
+  Go floor 1.22 (root) / 1.25 (evmoracle), CI matrix (1.22–1.25 × linux/macos/windows, cross-compile, lint,
+  govulncheck, evmoracle, scheduled fuzz), SECURITY.md, CHANGELOG.md, CONTRIBUTING.md, docs/RELEASING.md, Makefile.

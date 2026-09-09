@@ -1,6 +1,9 @@
 package sphincsminus
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestFieldWidthPanics checks the internal-invariant guard in field
 // (digest.go): every caller in this package passes width <= 64 (derived
@@ -23,25 +26,47 @@ func TestFieldWidthPanics(t *testing.T) {
 // and run correctly rather than spawning more workers than there is work
 // for.
 func TestParallelChunksEdgeCases(t *testing.T) {
-	parallelChunks(0, func(start, end int) {
+	ctx := context.Background()
+	if err := parallelChunks(ctx, 0, func(start, end int) {
 		t.Fatalf("work called for n=0: [%d,%d)", start, end)
-	})
-	parallelChunks(-1, func(start, end int) {
+	}); err != nil {
+		t.Errorf("parallelChunks(n=0) error = %v, want nil", err)
+	}
+	if err := parallelChunks(ctx, -1, func(start, end int) {
 		t.Fatalf("work called for n=-1: [%d,%d)", start, end)
-	})
+	}); err != nil {
+		t.Errorf("parallelChunks(n=-1) error = %v, want nil", err)
+	}
 
 	for _, n := range []int{1, 2, 3} {
 		seen := make([]bool, n)
-		parallelChunks(n, func(start, end int) {
+		if err := parallelChunks(ctx, n, func(start, end int) {
 			for i := start; i < end; i++ {
 				seen[i] = true
 			}
-		})
+		}); err != nil {
+			t.Errorf("n=%d: parallelChunks error = %v, want nil", n, err)
+		}
 		for i, ok := range seen {
 			if !ok {
 				t.Errorf("n=%d: index %d never visited", n, i)
 			}
 		}
+	}
+}
+
+// TestParallelChunksCancel checks that parallelChunks returns ctx.Err()
+// promptly (without calling work again) once ctx is already canceled
+// before it is called, and that an already-canceled ctx is a pure no-op
+// for n<=0 too.
+func TestParallelChunksCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := parallelChunks(ctx, 1000, func(start, end int) {
+		t.Fatalf("work called with an already-canceled ctx: [%d,%d)", start, end)
+	}); err == nil {
+		t.Error("parallelChunks with an already-canceled ctx returned nil error, want ctx.Err()")
 	}
 }
 

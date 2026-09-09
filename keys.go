@@ -1,9 +1,17 @@
 package sphincsminus
 
-import "crypto/rand"
+import (
+	"context"
+	"crypto/rand"
+	"fmt"
+)
 
 // PublicKey is a SPHINCS⁻ public key for a given Params: a 16-byte
 // tweakable-hash seed and a 16-byte hypertree root (SPEC §3).
+//
+// A *PublicKey is safe for concurrent use: Verify never mutates the
+// receiver or any package-level state, so the same *PublicKey may be
+// shared across any number of goroutines calling Verify concurrently.
 type PublicKey struct {
 	Params *Params
 	Seed   [16]byte
@@ -20,10 +28,10 @@ func (pk *PublicKey) Bytes() []byte {
 }
 
 // ParsePublicKey decodes the 32-byte wire form Seed‖Root produced by
-// Bytes.
+// Bytes. It never panics on malformed input, however short or long.
 func ParsePublicKey(p *Params, b []byte) (*PublicKey, error) {
 	if len(b) != 32 {
-		return nil, ErrInvalidPublicKey
+		return nil, fmt.Errorf("%w: got %d bytes, want 32", ErrInvalidPublicKey, len(b))
 	}
 	pk := &PublicKey{Params: p}
 	copy(pk.Seed[:], b[0:16])
@@ -56,13 +64,27 @@ func (pk *PublicKey) Verify(msg, sig []byte) bool {
 // PrivateKey is a SPHINCS⁻ private key: the 32-byte signer secret plus
 // its corresponding PublicKey (SPEC §3).
 //
-// Signing (PrivateKey.Sign) is added in Phase 2; this Phase 1 package
-// only offers construction, encoding, and verification via the embedded
-// PublicKey.
+// PrivateKey.Sign/SignContext are safe for concurrent use: signing has
+// no shared mutable state (every call works on its own local copies of
+// the seeds and builds its own subtrees from scratch), so the same
+// *PrivateKey may be used to sign different messages concurrently from
+// multiple goroutines. The one exception is Zeroize, which mutates
+// SkSeed in place: it must not be called concurrently with Sign/
+// SignContext (or with another Zeroize) on the same key — callers that
+// want to retire a key must first ensure no signing call on it is still
+// in flight.
 type PrivateKey struct {
 	Params *Params
 	SkSeed [32]byte
 	PublicKey
+
+	// zeroized records whether Zeroize has been called. Once true,
+	// Sign/SignContext refuse to run (returning ErrInvalidPrivateKey)
+	// rather than silently signing with an all-zero SkSeed, which would
+	// produce a signature that looks superficially well-formed but
+	// verifies under a different (and never intentionally generated)
+	// key.
+	zeroized bool
 }
 
 // Bytes encodes the private key as the 64-byte wire form
@@ -76,10 +98,10 @@ func (sk *PrivateKey) Bytes() []byte {
 }
 
 // ParsePrivateKey decodes the 64-byte wire form SkSeed‖Seed‖Root produced
-// by Bytes.
+// by Bytes. It never panics on malformed input, however short or long.
 func ParsePrivateKey(p *Params, b []byte) (*PrivateKey, error) {
 	if len(b) != 64 {
-		return nil, ErrInvalidPrivateKey
+		return nil, fmt.Errorf("%w: got %d bytes, want 64", ErrInvalidPrivateKey, len(b))
 	}
 	sk := &PrivateKey{Params: p}
 	copy(sk.SkSeed[:], b[0:32])
@@ -89,15 +111,20 @@ func ParsePrivateKey(p *Params, b []byte) (*PrivateKey, error) {
 	return sk, nil
 }
 
-// Zeroize overwrites the secret seed with zeros. Callers that hold a
-// PrivateKey past its useful lifetime should call this where practical
-// (SPEC §13); it is not a substitute for proper secret-handling
-// discipline (e.g. avoiding secrets in swappable memory), which is
-// outside what a pure-Go library can guarantee.
+// Zeroize overwrites the secret seed with zeros and marks sk so that any
+// later Sign/SignContext call fails with ErrInvalidPrivateKey instead of
+// silently signing with the now-zeroed (and never intentionally
+// generated) SkSeed. Callers that hold a PrivateKey past its useful
+// lifetime should call this where practical (SPEC §13); it is not a
+// substitute for proper secret-handling discipline (e.g. avoiding
+// secrets in swappable memory), which is outside what a pure-Go library
+// can guarantee. Zeroize must not be called concurrently with Sign/
+// SignContext (or with another Zeroize) on the same key.
 func (sk *PrivateKey) Zeroize() {
 	for i := range sk.SkSeed {
 		sk.SkSeed[i] = 0
 	}
+	sk.zeroized = true
 }
 
 // NewPrivateKeyFromSeeds builds a PrivateKey from an explicit skSeed and
@@ -115,7 +142,15 @@ func NewPrivateKeyFromSeeds(p *Params, skSeed [32]byte, pkSeed [16]byte) (*Priva
 	copy(pkSeedW[:16], pkSeed[:])
 	copy(skSeedW[:], skSeed[:])
 
-	root := subtreeRoot(p, pkSeedW, skSeedW, uint32(p.D-1), 0)
+	// context.Background() never cancels, so this can only ever return a
+	// nil error; NewPrivateKeyFromSeeds itself takes no ctx (key
+	// derivation is not in the set of long-running operations this
+	// package's ctx support targets — only signing is), so there is
+	// nothing to propagate a cancellation from.
+	root, err := subtreeRoot(context.Background(), p, pkSeedW, skSeedW, uint32(p.D-1), 0)
+	if err != nil {
+		return nil, err
+	}
 
 	sk := &PrivateKey{Params: p, SkSeed: skSeed}
 	sk.PublicKey.Params = p
@@ -174,10 +209,38 @@ func DeriveKeyReference(p *Params, material [32]byte) (*PrivateKey, error) {
 // that will sign more than once with the same key should prefer Signer,
 // which caches the (otherwise redundantly rebuilt) top-layer hypertree
 // subtree across calls but is required to produce byte-identical output
-// to Sign.
+// to Sign. Sign is equivalent to SignContext(context.Background(), msg).
 func (sk *PrivateKey) Sign(msg []byte) ([]byte, error) {
+	return sk.SignContext(context.Background(), msg)
+}
+
+// SignContext behaves exactly like Sign, except that it also honors ctx:
+// if ctx is canceled or its deadline expires before signing completes,
+// SignContext returns promptly with a wrapped ctx.Err() rather than
+// continuing to grind R or build hypertree subtrees for however many
+// seconds a full sign might otherwise take (a C13 sign is a
+// multi-second operation; see BenchmarkSignC13). The ctx.Err() checks
+// threaded through signing are coarse-grained (never per hash), so
+// signing with an uncancelled ctx — including the ctx == nil case, which
+// is treated as context.Background() rather than panicking — produces
+// byte-identical output to Sign for the same key and message. A nil sk
+// or one that has been Zeroize()'d returns ErrInvalidPrivateKey rather
+// than panicking or signing with a zeroed seed.
+func (sk *PrivateKey) SignContext(ctx context.Context, msg []byte) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sk == nil {
+		return nil, ErrInvalidPrivateKey
+	}
+	if sk.zeroized {
+		return nil, fmt.Errorf("%w: key has been zeroized", ErrInvalidPrivateKey)
+	}
+	if err := sk.Params.Validate(); err != nil {
+		return nil, err
+	}
 	if len(msg) != 32 {
-		return nil, ErrInvalidMessageLength
+		return nil, fmt.Errorf("%w: got %d bytes, want 32", ErrInvalidMessageLength, len(msg))
 	}
 	var msgArr [32]byte
 	copy(msgArr[:], msg)
@@ -186,8 +249,13 @@ func (sk *PrivateKey) Sign(msg []byte) ([]byte, error) {
 	copy(pkSeedW[:16], sk.PublicKey.Seed[:])
 	copy(pkRootW[:16], sk.PublicKey.Root[:])
 	copy(skSeedW[:], sk.SkSeed[:])
+	defer func() {
+		for i := range skSeedW {
+			skSeedW[i] = 0
+		}
+	}()
 
-	return signInternal(sk.Params, pkSeedW, pkRootW, skSeedW, msgArr, nil)
+	return signInternal(ctx, sk.Params, pkSeedW, pkRootW, skSeedW, msgArr, nil)
 }
 
 // Signer wraps a PrivateKey with a precomputed cache of its top-layer
@@ -199,6 +267,14 @@ func (sk *PrivateKey) Sign(msg []byte) ([]byte, error) {
 // calls instead of rebuilding it every time as PrivateKey.Sign does.
 // Signer.Sign is required to produce byte-identical output to
 // sk.Sign(msg) for the same key and message.
+//
+// A Signer holds only its cached subtree (whose levels are public node
+// values, never mutated after NewSigner builds them) plus the
+// *PrivateKey it wraps, so Signer.Sign/SignContext inherit
+// PrivateKey.Sign's concurrency-safety: the same *Signer may be used
+// from multiple goroutines to sign different messages concurrently. As
+// with PrivateKey, Zeroize must not be called concurrently with a
+// Sign/SignContext still in flight on the same Signer.
 type Signer struct {
 	sk    *PrivateKey
 	cache *subtreeCache
@@ -220,7 +296,13 @@ func NewSigner(sk *PrivateKey) (*Signer, error) {
 	copy(skSeedW[:], sk.SkSeed[:])
 
 	layer := uint32(p.D - 1)
-	levels := buildSubtree(p, pkSeedW, skSeedW, layer, 0)
+	// context.Background() never cancels, so this can only ever return a
+	// nil error (NewSigner takes no ctx: building the cache is a
+	// one-time setup cost, not part of the per-Sign-call ctx support).
+	levels, err := buildSubtree(context.Background(), p, pkSeedW, skSeedW, layer, 0)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Signer{
 		sk:    sk,
@@ -228,23 +310,62 @@ func NewSigner(sk *PrivateKey) (*Signer, error) {
 	}, nil
 }
 
+// Zeroize zeroizes the PrivateKey this Signer wraps (PrivateKey.Zeroize):
+// after this call, s.Sign/SignContext return ErrInvalidPrivateKey. The
+// cached subtree (s.cache) holds only public node values, so there is
+// nothing else in a Signer that needs scrubbing. Zeroize must not be
+// called concurrently with a Sign/SignContext still in flight on s.
+func (s *Signer) Zeroize() {
+	if s == nil || s.sk == nil {
+		return
+	}
+	s.sk.Zeroize()
+}
+
 // Sign produces a deterministic SPHINCS⁻ signature over msg, exactly as
 // sk.Sign(msg) would (byte-identical output), but reuses the cached
-// top-layer subtree computed by NewSigner instead of rebuilding it.
+// top-layer subtree computed by NewSigner instead of rebuilding it. Sign
+// is equivalent to SignContext(context.Background(), msg).
 func (s *Signer) Sign(msg []byte) ([]byte, error) {
+	return s.SignContext(context.Background(), msg)
+}
+
+// SignContext behaves exactly like Sign, except that it also honors ctx
+// (see PrivateKey.SignContext for the cancellation/determinism
+// contract, which applies identically here): a nil ctx is treated as
+// context.Background(), and a nil Signer, a Signer wrapping a nil
+// PrivateKey, or one whose PrivateKey has been Zeroize()'d all return
+// ErrInvalidPrivateKey rather than panicking.
+func (s *Signer) SignContext(ctx context.Context, msg []byte) ([]byte, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if s == nil || s.sk == nil {
+		return nil, ErrInvalidPrivateKey
+	}
+	sk := s.sk
+	if sk.zeroized {
+		return nil, fmt.Errorf("%w: key has been zeroized", ErrInvalidPrivateKey)
+	}
+	p := sk.Params
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
 	if len(msg) != 32 {
-		return nil, ErrInvalidMessageLength
+		return nil, fmt.Errorf("%w: got %d bytes, want 32", ErrInvalidMessageLength, len(msg))
 	}
 	var msgArr [32]byte
 	copy(msgArr[:], msg)
-
-	sk := s.sk
-	p := sk.Params
 
 	var pkSeedW, pkRootW, skSeedW word
 	copy(pkSeedW[:16], sk.PublicKey.Seed[:])
 	copy(pkRootW[:16], sk.PublicKey.Root[:])
 	copy(skSeedW[:], sk.SkSeed[:])
+	defer func() {
+		for i := range skSeedW {
+			skSeedW[i] = 0
+		}
+	}()
 
-	return signInternal(p, pkSeedW, pkRootW, skSeedW, msgArr, s.cache)
+	return signInternal(ctx, p, pkSeedW, pkRootW, skSeedW, msgArr, s.cache)
 }

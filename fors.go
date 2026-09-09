@@ -1,5 +1,7 @@
 package sphincsminus
 
+import "context"
+
 // forsPkFromSig recomputes the FORS+C public key node from a signature
 // (SPEC §8). sig is the *whole* signature byte slice (the FORS secrets
 // and authentication paths live at fixed offsets within it, per SPEC
@@ -95,7 +97,15 @@ func forsPkFromSig(p *Params, pkSeed word, digest *word, htIdx uint32, sig []byt
 // they've extracted the root/auth path they need, so peak memory is
 // bounded by one tree's worth of leaves (16 MiB for C13) rather than all
 // k of them at once.
-func buildForsTree(p *Params, pkSeed, skSeed word, htIdx, t uint32) (levels [][]word) {
+//
+// Each per-leaf secret is a stack-local temporary that is zeroed
+// immediately after it has been hashed into the (public) leaf value
+// (SPEC §13, best-effort: Go's runtime can still leave copies in
+// registers or a reused stack slot, but this closes the easiest window).
+// ctx is checked once per parallelChunks sub-batch during leaf
+// generation and once per level during the level-combine phase; on
+// cancellation buildForsTree returns (nil, ctx.Err()).
+func buildForsTree(ctx context.Context, p *Params, pkSeed, skSeed word, htIdx, t uint32) (levels [][]word, err error) {
 	sh := uint32(p.SubtreeHeight())
 	shMask := uint32(1)<<sh - 1
 	idxTree0 := uint64(htIdx >> sh)
@@ -104,18 +114,24 @@ func buildForsTree(p *Params, pkSeed, skSeed word, htIdx, t uint32) (levels [][]
 	numLeaves := 1 << uint(a)
 
 	leaves := make([]word, numLeaves)
-	parallelChunks(numLeaves, func(start, end int) {
+	if err := parallelChunks(ctx, numLeaves, func(start, end int) {
 		for j := start; j < end; j++ {
 			secret := forsSecret(skSeed, htIdx, t, uint32(j))
 			leafAdrs := newAdrs(0, idxTree0, adrsForsTree, idxLeaf0, 0, (t<<a)|uint32(j))
 			leaves[j] = th(pkSeed, leafAdrs, secret)
+			secret = word{}
 		}
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	levels = make([][]word, a+1)
 	levels[0] = leaves
 	cur := leaves
 	for hh := uint32(1); hh <= a; hh++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		next := make([]word, len(cur)/2)
 		for i := range next {
 			nodeAdrs := newAdrs(0, idxTree0, adrsForsTree, idxLeaf0, hh, (t<<(a-hh))|uint32(i))
@@ -124,7 +140,7 @@ func buildForsTree(p *Params, pkSeed, skSeed word, htIdx, t uint32) (levels [][]
 		levels[hh] = next
 		cur = next
 	}
-	return levels
+	return levels, nil
 }
 
 // forsSign implements FORS+C signing (SPEC §8) for the k trees keyed by
@@ -141,7 +157,12 @@ func buildForsTree(p *Params, pkSeed, skSeed word, htIdx, t uint32) (levels [][]
 // nil and the caller must not emit anything for it), hashed as "leaf 0"
 // of that tree when folded into forsPk, matching the verifier's
 // forsPkFromSig exactly.
-func forsSign(p *Params, pkSeed, skSeed word, digest *word, htIdx uint32) (secrets []word, auths [][]word, forsPk word) {
+//
+// ctx is checked once per tree (between buildForsTree calls) in addition
+// to the finer-grained checks buildForsTree itself performs; on
+// cancellation forsSign returns a non-nil err and the other return
+// values are zero/nil and must not be used.
+func forsSign(ctx context.Context, p *Params, pkSeed, skSeed word, digest *word, htIdx uint32) (secrets []word, auths [][]word, forsPk word, err error) {
 	k := p.K
 	a := uint32(p.A)
 	sh := uint32(p.SubtreeHeight())
@@ -156,18 +177,31 @@ func forsSign(p *Params, pkSeed, skSeed word, digest *word, htIdx uint32) (secre
 	roots := make([]word, k)
 
 	for t := 0; t < k-1; t++ {
+		if e := ctx.Err(); e != nil {
+			return nil, nil, word{}, e
+		}
 		tt := uint32(t)
 		idx := int(fi[t])
 
-		levels := buildForsTree(p, pkSeed, skSeed, htIdx, tt)
+		levels, e := buildForsTree(ctx, p, pkSeed, skSeed, htIdx, tt)
+		if e != nil {
+			return nil, nil, word{}, e
+		}
 		secrets[t] = forsSecret(skSeed, htIdx, tt, uint32(idx))
 		auths[t] = authPath(levels, idx)
 		roots[t] = levels[a][0]
 	}
 
+	if e := ctx.Err(); e != nil {
+		return nil, nil, word{}, e
+	}
+
 	// Forced-zero tree: reveal root(k-1) itself, no authentication path.
 	tLast := uint32(k - 1)
-	levels := buildForsTree(p, pkSeed, skSeed, htIdx, tLast)
+	levels, e := buildForsTree(ctx, p, pkSeed, skSeed, htIdx, tLast)
+	if e != nil {
+		return nil, nil, word{}, e
+	}
 	rootKMinus1 := levels[a][0]
 	secrets[k-1] = rootKMinus1
 
@@ -177,5 +211,5 @@ func forsSign(p *Params, pkSeed, skSeed word, digest *word, htIdx uint32) (secre
 	rootsAdrs := newAdrs(0, idxTree0, adrsForsRoots, idxLeaf0, 0, 0)
 	forsPk = thMulti(pkSeed, rootsAdrs, roots)
 
-	return secrets, auths, forsPk
+	return secrets, auths, forsPk, nil
 }

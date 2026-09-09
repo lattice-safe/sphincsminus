@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, Monday 03:00 UTC — catches toolchain/dependency drift between
+    # pushes (new Go point releases, go-ethereum updates in evmoracle, etc).
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (go${{ matrix.go }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ['1.22.x', '1.23.x', '1.24.x', '1.25.x']
+        os: [ubuntu-latest]
+        include:
+          - go: '1.25.x'
+            os: macos-latest
+          - go: '1.25.x'
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test (race)
+        shell: bash
+        run: |
+          # The race detector needs cgo + a C toolchain; every runner/arch in
+          # this matrix supports it, but keep the escape hatch for anything
+          # that doesn't (e.g. windows/386, not currently in the matrix).
+          if [ "${{ runner.os }}" = "Windows" ] && [ "$(go env GOARCH)" = "386" ]; then
+            go test -count=1 ./...
+          else
+            go test -race -count=1 ./...
+          fi
+
+      - name: Slow tests (full C7/C13 signing)
+        if: matrix.os == 'ubuntu-latest' && matrix.go == '1.25.x'
+        env:
+          SPHINCSMINUS_SLOW: '1'
+        run: go test -count=1 ./...
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)"
+
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  cross-compile:
+    name: cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: 386
+          - goos: windows
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: js
+            goarch: wasm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
+
+  evmoracle:
+    name: evmoracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Test
+        working-directory: evmoracle
+        run: go test -count=1 ./...
+
+      - name: Slow test (C7/C13 on-chain)
+        working-directory: evmoracle
+        env:
+          SPHINCSMINUS_SLOW: '1'
+        run: go test -count=1 ./...
+
+  fuzz:
+    name: fuzz
+    runs-on: ubuntu-latest
+    # Fuzzing is slow relative to the rest of CI: only run it on the
+    # schedule and on pushes to main, not on every pull request.
+    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Fuzz FuzzVerify
+        run: go test -run xxx -fuzz FuzzVerify -fuzztime 60s .
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: true
+
+      - name: Test with coverage
+        run: go test -coverprofile=coverage.out ./...
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out

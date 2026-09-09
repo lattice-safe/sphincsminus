@@ -1,5 +1,9 @@
 # sphincsminus
 
+[![CI](https://github.com/skardas/sphincsminus/actions/workflows/ci.yml/badge.svg)](https://github.com/skardas/sphincsminus/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/lattice-safe/sphincsminus.svg)](https://pkg.go.dev/github.com/lattice-safe/sphincsminus)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Pure-Go implementation of **SPHINCS⁻ (SPHINCS minus)**, an EVM-oriented,
 stateless hash-based signature scheme: a SPHINCS+ / SLH-DSA-style
 construction (FIPS 205 §4.2 uncompressed ADRS) re-instantiated over
@@ -14,6 +18,24 @@ and implemented at [github.com/nconsigny/SPHINCS-](https://github.com/nconsigny/
 signatures produced by this package verify unchanged, byte-for-byte, in
 that repository's compiled bytecode, and this package's `Verify` mirrors
 that bytecode's control flow exactly.
+
+## Status & support
+
+* **Version 0.1.0** — pre-1.0: the Go API may still change between minor
+  versions; the wire format for a given parameter-set name (C7, C9, C10,
+  C11, C13) never changes (see [`docs/RELEASING.md`](docs/RELEASING.md)
+  for the full policy).
+* **Supported Go**: 1.22 and later. CI tests 1.22.x, 1.23.x, 1.24.x, and
+  1.25.x.
+* **Platforms tested**: CI runs the full suite on Linux, and Go 1.25 on
+  macOS and Windows; it also cross-compiles (build-only) for
+  linux/amd64, linux/arm64, linux/386, windows/amd64, darwin/arm64, and
+  js/wasm.
+* **Security policy**: see [`SECURITY.md`](SECURITY.md) for supported
+  versions, how to report a vulnerability, and scope.
+* **Research-grade, not FIPS 205, unaudited** — see
+  [Security](#security) below before using this for anything that
+  matters.
 
 ## Features
 
@@ -68,7 +90,9 @@ go get github.com/lattice-safe/sphincsminus
 package main
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/lattice-safe/sphincsminus"
 )
@@ -97,6 +121,12 @@ func main() {
 		panic(err)
 	}
 	_, _ = signer.Sign(msg[:])
+
+	// A C13/C7 sign can take seconds (the FORS+C R-grind); SignContext
+	// lets a caller bound or cancel that wait instead of blocking.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = signer.SignContext(ctx, msg[:])
 }
 ```
 
@@ -175,6 +205,19 @@ documentation.
   `go.sum`; `go get github.com/lattice-safe/sphincsminus` never pulls it
   in.
 
+## Thread safety & cancellation
+
+* `PublicKey` and `Params` (including the predefined `C7`/`C9`/`C10`/`C11`/`C13`)
+  are immutable after construction and safe to share and read concurrently
+  from any number of goroutines.
+* `PrivateKey.Sign` and `Signer.Sign` are safe to call concurrently — from
+  the same `*Signer`/`*PrivateKey` or different ones — with no external
+  locking required.
+* `(*PrivateKey).SignContext(ctx, msg)` and `(*Signer).SignContext(ctx, msg)`
+  behave like `Sign`/`Sign` but check `ctx` while grinding, so a long C13
+  (or C7) sign can be cancelled or bounded with a timeout instead of
+  blocking the caller until it finishes.
+
 ## Performance
 
 Measured on an Apple M1 Max (10 cores):
@@ -230,6 +273,17 @@ signature scheme. The two packages mirror each other's flat-package
 layout and API shape, but are not wire-compatible with one another:
 reach for `lattice-slh-dsa-go` when you need FIPS 205 compliance, and for
 `sphincsminus` when you need cheap keccak256 on-chain verification.
+
+## Development
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, test commands,
+the rule that `docs/SPEC.md` is the wire-format authority, and how to
+regenerate upstream reference vectors. Common tasks are wired up in the
+[`Makefile`](Makefile): `make build`, `make test`, `make test-slow`,
+`make race`, `make lint`, `make fuzz`, `make cover`, `make bench`,
+`make oracle` (the `evmoracle` module), `make cross` (cross-compile),
+and `make tidy`. See [`docs/RELEASING.md`](docs/RELEASING.md) for the
+release process and versioning policy.
 
 ## License
 

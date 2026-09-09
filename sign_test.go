@@ -2,6 +2,7 @@ package sphincsminus
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"testing"
 )
@@ -283,11 +284,11 @@ func TestSignInvalidMessageLength(t *testing.T) {
 
 	for _, n := range []int{0, 16, 31, 33, 64} {
 		msg := make([]byte, n)
-		if _, err := sk.Sign(msg); err != ErrInvalidMessageLength {
-			t.Errorf("PrivateKey.Sign(len=%d) error = %v, want ErrInvalidMessageLength", n, err)
+		if _, err := sk.Sign(msg); !errors.Is(err, ErrInvalidMessageLength) {
+			t.Errorf("PrivateKey.Sign(len=%d) error = %v, want errors.Is(..., ErrInvalidMessageLength)", n, err)
 		}
-		if _, err := signer.Sign(msg); err != ErrInvalidMessageLength {
-			t.Errorf("Signer.Sign(len=%d) error = %v, want ErrInvalidMessageLength", n, err)
+		if _, err := signer.Sign(msg); !errors.Is(err, ErrInvalidMessageLength) {
+			t.Errorf("Signer.Sign(len=%d) error = %v, want errors.Is(..., ErrInvalidMessageLength)", n, err)
 		}
 	}
 }

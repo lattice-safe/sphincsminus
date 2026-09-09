@@ -1,5 +1,7 @@
 package sphincsminus
 
+import "context"
+
 // chain applies the WOTS+C chaining function to x, walking `steps` hash
 // steps starting at position `start` (SPEC §9):
 //
@@ -110,14 +112,23 @@ func wotsPkOnly(p *Params, pkSeed, skSeed word, layer uint32, tree uint64, kp ui
 // indicate a much deeper problem elsewhere, so this panics rather than
 // threading an error through every caller for a case that cannot occur
 // in practice).
-func wotsFindCount(p *Params, pkSeed word, layer uint32, tree uint64, kp uint32, msg word) (count uint32, digits [43]uint8) {
+//
+// ctx.Err() is checked every grindCheckInterval counts (never per hash);
+// on cancellation wotsFindCount returns that error and digits is the
+// zero value, which the caller must not use.
+func wotsFindCount(ctx context.Context, p *Params, pkSeed word, layer uint32, tree uint64, kp uint32, msg word) (count uint32, digits [43]uint8, err error) {
 	adrs0 := newAdrs(layer, tree, adrsWotsHash, kp, 0, 0)
 	target := uint32(p.TargetSum)
 	for c := uint32(0); ; c++ {
+		if c%grindCheckInterval == 0 {
+			if e := ctx.Err(); e != nil {
+				return 0, [43]uint8{}, e
+			}
+		}
 		d := wotsDigest(pkSeed, adrs0, msg, c)
 		digs := wotsDigits(&d, p)
 		if digitSum(digs) == target {
-			return c, digs
+			return c, digs, nil
 		}
 		if c == ^uint32(0) {
 			panic("sphincsminus: wotsFindCount exhausted the uint32 count space")
@@ -128,13 +139,17 @@ func wotsFindCount(p *Params, pkSeed word, layer uint32, tree uint64, kp uint32,
 // wotsSign implements WOTS+C signing (SPEC §9): grind the count via
 // wotsFindCount, then reveal sig[i] = chain(sks[i], 0, digit[i]) for each
 // of the l chains. sks must be the l secret-key chain bases for this
-// exact (layer, tree, kp), as returned by wotsKeygen.
-func wotsSign(p *Params, pkSeed word, sks []word, layer uint32, tree uint64, kp uint32, msg word) (sig []word, count uint32) {
-	count, digits := wotsFindCount(p, pkSeed, layer, tree, kp, msg)
+// exact (layer, tree, kp), as returned by wotsKeygen. On cancellation
+// (ctx) wotsSign returns a non-nil err and sig is nil.
+func wotsSign(ctx context.Context, p *Params, pkSeed word, sks []word, layer uint32, tree uint64, kp uint32, msg word) (sig []word, count uint32, err error) {
+	count, digits, err := wotsFindCount(ctx, p, pkSeed, layer, tree, kp, msg)
+	if err != nil {
+		return nil, 0, err
+	}
 	sig = make([]word, p.L)
 	for i := 0; i < p.L; i++ {
 		adrs := newAdrs(layer, tree, adrsWotsHash, kp, uint32(i), 0)
 		sig[i] = chain(p, pkSeed, adrs, sks[i], 0, uint32(digits[i]))
 	}
-	return sig, count
+	return sig, count, nil
 }

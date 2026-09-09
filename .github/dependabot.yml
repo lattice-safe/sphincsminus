@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    # The root module has zero external dependencies today, but keep it
+    # watched so a future dependency (or a stdlib-adjacent toolchain bump)
+    # doesn't go unnoticed.
+
+  - package-ecosystem: gomod
+    directory: /evmoracle
+    schedule:
+      interval: weekly

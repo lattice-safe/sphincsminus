@@ -2,6 +2,7 @@ package sphincsminus
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -259,8 +260,8 @@ func TestPublicKeySeedRootWord(t *testing.T) {
 // length other than exactly 32.
 func TestParsePublicKeyWrongLength(t *testing.T) {
 	for _, n := range []int{0, 1, 16, 31, 33, 64} {
-		if _, err := ParsePublicKey(C11, make([]byte, n)); err != ErrInvalidPublicKey {
-			t.Errorf("ParsePublicKey(len=%d) error = %v, want ErrInvalidPublicKey", n, err)
+		if _, err := ParsePublicKey(C11, make([]byte, n)); !errors.Is(err, ErrInvalidPublicKey) {
+			t.Errorf("ParsePublicKey(len=%d) error = %v, want errors.Is(..., ErrInvalidPublicKey)", n, err)
 		}
 	}
 }
@@ -273,8 +274,8 @@ func TestParsePublicKeyWrongLength(t *testing.T) {
 // NewPrivateKeyFromSeeds rather than from parsing arbitrary bytes).
 func TestParsePrivateKeyWrongLength(t *testing.T) {
 	for _, n := range []int{0, 1, 32, 63, 65, 128} {
-		if _, err := ParsePrivateKey(C11, make([]byte, n)); err != ErrInvalidPrivateKey {
-			t.Errorf("ParsePrivateKey(len=%d) error = %v, want ErrInvalidPrivateKey", n, err)
+		if _, err := ParsePrivateKey(C11, make([]byte, n)); !errors.Is(err, ErrInvalidPrivateKey) {
+			t.Errorf("ParsePrivateKey(len=%d) error = %v, want errors.Is(..., ErrInvalidPrivateKey)", n, err)
 		}
 	}
 

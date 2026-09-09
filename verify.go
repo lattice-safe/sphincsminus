@@ -9,11 +9,15 @@ import (
 // 16-byte pkSeed/pkRoot, a 32-byte message, and signature bytes sig laid
 // out per SPEC §11. It mirrors the Solidity verifiers' control flow
 // (SPEC §11/§12) and returns false — never panics — on any malformed or
-// invalid input: wrong lengths, a forced-zero violation, a digit-sum
-// mismatch at any hypertree layer, or a final root mismatch. The root
-// comparison is constant-time.
+// invalid input: a nil or structurally invalid p (see Params.Validate;
+// this is what makes every internal index/shift below safe even for a
+// hand-built or corrupted Params, since all of Params' fields are
+// exported and a caller can always construct one directly), wrong
+// lengths, a forced-zero violation, a digit-sum mismatch at any
+// hypertree layer, or a final root mismatch. The root comparison is
+// constant-time.
 func Verify(p *Params, pkSeed, pkRoot [16]byte, msg, sig []byte) bool {
-	if p == nil {
+	if err := p.Validate(); err != nil {
 		return false
 	}
 	if len(msg) != 32 {

@@ -1,9 +1,20 @@
 package sphincsminus
 
 import (
+	"context"
 	"runtime"
 	"sync"
 )
+
+// grindCheckInterval is how many loop iterations (grindR, wotsFindCount)
+// or work-items (parallelChunks' per-goroutine sub-batches) pass between
+// ctx.Err() checks in the signing hot loops. It is deliberately coarse
+// (never per-hash) so that threading ctx through these loops has no
+// measurable effect on signing throughput for the common case of an
+// uncancelled context.Background(), while still bounding how long a
+// cancellation takes to be noticed to a small, constant amount of extra
+// work (SPEC §13 / Phase 4 hardening task).
+const grindCheckInterval = 4096
 
 // computeRoot recomputes an XMSS subtree root from a leaf value and its
 // authentication path (SPEC §10, sharing the sibling-swap rule spelled
@@ -48,9 +59,27 @@ func computeRoot(p *Params, pkSeed word, layer uint32, tree uint64, leaf word, l
 // the caller's preallocated output, so the result is deterministic
 // regardless of goroutine scheduling: which worker computes a given
 // index never changes, only when.
-func parallelChunks(n int, work func(start, end int)) {
+//
+// Each worker's range is itself processed in sub-batches of at most
+// grindCheckInterval items, with a ctx.Err() check between sub-batches
+// (never per item, let alone per hash): if ctx is canceled or its
+// deadline expires, every worker notices within one sub-batch and
+// returns without completing its remaining range. parallelChunks always
+// waits for every spawned goroutine before returning (there is no early
+// return that leaves a goroutine running), so a canceled ctx can never
+// leak a goroutine; it can only make the caller-supplied output slices
+// partially filled, which is fine because the caller (buildSubtree/
+// buildForsTree) discards them and propagates ctx.Err() instead. With an
+// uncancelled ctx (context.Background()), ctx.Err() is a cheap,
+// allocation-free nil check, so this sub-batching costs a small,
+// constant amount of extra loop overhead and never changes which
+// goroutine computes which index -- the result is still byte-identical.
+func parallelChunks(ctx context.Context, n int, work func(start, end int)) error {
 	if n <= 0 {
-		return
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	workers := runtime.GOMAXPROCS(0)
 	if workers > n {
@@ -70,10 +99,20 @@ func parallelChunks(n int, work func(start, end int)) {
 		wg.Add(1)
 		go func(start, end int) {
 			defer wg.Done()
-			work(start, end)
+			for s := start; s < end; s += grindCheckInterval {
+				e := s + grindCheckInterval
+				if e > end {
+					e = end
+				}
+				work(s, e)
+				if ctx.Err() != nil {
+					return
+				}
+			}
 		}(start, end)
 	}
 	wg.Wait()
+	return ctx.Err()
 }
 
 // buildSubtree builds an XMSS subtree of height sh = Params.SubtreeHeight()
@@ -85,21 +124,33 @@ func parallelChunks(n int, work func(start, end int)) {
 // the leaves are combined pairwise with TREE-typed ADRS per SPEC §10; the
 // result is levels[0..sh], with levels[sh] holding exactly the root
 // (length 1).
-func buildSubtree(p *Params, pkSeed, skSeed word, layer uint32, tree uint64) (levels [][]word) {
+//
+// ctx is checked once per parallelChunks sub-batch during leaf
+// generation and once per level during the (sequential) level-combine
+// phase above the leaves; if it is canceled, buildSubtree returns
+// (nil, ctx.Err()) instead of a partially-built result. Passing
+// context.Background() reproduces the unconditional, always-completes
+// behaviour this function had before ctx support was added.
+func buildSubtree(ctx context.Context, p *Params, pkSeed, skSeed word, layer uint32, tree uint64) (levels [][]word, err error) {
 	sh := p.SubtreeHeight()
 	numLeaves := 1 << uint(sh)
 
 	leaves := make([]word, numLeaves)
-	parallelChunks(numLeaves, func(start, end int) {
+	if err := parallelChunks(ctx, numLeaves, func(start, end int) {
 		for kp := start; kp < end; kp++ {
 			leaves[kp] = wotsPkOnly(p, pkSeed, skSeed, layer, tree, uint32(kp))
 		}
-	})
+	}); err != nil {
+		return nil, err
+	}
 
 	levels = make([][]word, sh+1)
 	levels[0] = leaves
 	cur := leaves
 	for hh := 1; hh <= sh; hh++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		next := make([]word, len(cur)/2)
 		for i := range next {
 			adrs := newAdrs(layer, tree, adrsTree, 0, uint32(hh), uint32(i))
@@ -108,15 +159,18 @@ func buildSubtree(p *Params, pkSeed, skSeed word, layer uint32, tree uint64) (le
 		levels[hh] = next
 		cur = next
 	}
-	return levels
+	return levels, nil
 }
 
 // subtreeRoot builds the subtree at (layer, tree) and returns just its
 // root (levels[sh][0]), for callers (keys.go) that don't need the
 // intermediate levels or an authentication path.
-func subtreeRoot(p *Params, pkSeed, skSeed word, layer uint32, tree uint64) word {
-	levels := buildSubtree(p, pkSeed, skSeed, layer, tree)
-	return levels[len(levels)-1][0]
+func subtreeRoot(ctx context.Context, p *Params, pkSeed, skSeed word, layer uint32, tree uint64) (word, error) {
+	levels, err := buildSubtree(ctx, p, pkSeed, skSeed, layer, tree)
+	if err != nil {
+		return word{}, err
+	}
+	return levels[len(levels)-1][0], nil
 }
 
 // authPath extracts the authentication path for leafIdx from a tree's

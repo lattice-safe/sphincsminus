@@ -6,6 +6,17 @@ import "fmt"
 // package is hard-coded to a particular set except the recommended
 // default used by convenience constructors; everything else takes a
 // *Params explicitly.
+//
+// A *Params value is expected to be immutable after construction (the
+// five package-level instances, C7/C9/C10/C11/C13, never change) and is
+// then safe to share and read concurrently from any number of
+// goroutines: nothing in this package ever writes to a *Params it is
+// handed. Every function that accepts a caller-supplied *Params
+// (Verify, PublicKey.Verify, PrivateKey.Sign/SignContext, Signer.Sign/
+// SignContext, GenerateKey, NewPrivateKeyFromSeeds, DeriveKeyReference,
+// NewSigner) calls Validate() on it first and reports an error/false
+// instead of indexing out of range if the caller constructed or mutated
+// one into an invalid shape.
 type Params struct {
 	// Name is a short human-readable identifier, e.g. "C13".
 	Name string
@@ -84,9 +95,18 @@ func (p *Params) SigBytes() int {
 }
 
 // Validate checks internal consistency of a parameter set: the
-// currently-supported WOTS+C shape (w=8, log_w=3, l=43), the security
-// invariant k*a+h <= 256, that h is evenly divisible into d layers, and
-// that the derived signature size is self-consistent.
+// currently-supported WOTS+C shape (w=8, log_w=3, l=43), structural
+// bounds on every field that this package's internal index/shift
+// arithmetic relies on being small and non-negative (1 <= a <= 32,
+// 2 <= k <= 256, 1 <= h <= 64, subtree height h/d <= 32, 1 <= d <= 64),
+// the security invariant k*a+h <= 256, that h is evenly divisible into d
+// layers, and that the derived signature size is self-consistent. Every
+// exported function in this package that accepts a caller-supplied
+// *Params calls Validate() before doing anything else, specifically so
+// that a hand-built or corrupted Params (all exported fields, so a
+// caller can always construct one directly, e.g. the zero value) can
+// never reach code that indexes a slice or computes a bit-shift width
+// from one of these fields without first being rejected.
 func (p *Params) Validate() error {
 	if p == nil {
 		return fmt.Errorf("%w: nil params", ErrInvalidParams)
@@ -100,18 +120,32 @@ func (p *Params) Validate() error {
 	if p.L != 43 {
 		return fmt.Errorf("%w: %s: only l=43 is supported, got %d", ErrInvalidParams, p.Name, p.L)
 	}
-	if p.D <= 0 {
-		return fmt.Errorf("%w: %s: d must be positive, got %d", ErrInvalidParams, p.Name, p.D)
+	if p.D < 1 || p.D > 64 {
+		return fmt.Errorf("%w: %s: d must be in [1,64], got %d", ErrInvalidParams, p.Name, p.D)
+	}
+	if p.A < 1 || p.A > 32 {
+		return fmt.Errorf("%w: %s: a must be in [1,32], got %d", ErrInvalidParams, p.Name, p.A)
+	}
+	if p.K < 2 || p.K > 256 {
+		return fmt.Errorf("%w: %s: k must be in [2,256], got %d", ErrInvalidParams, p.Name, p.K)
+	}
+	if p.H < 1 || p.H > 64 {
+		return fmt.Errorf("%w: %s: h must be in [1,64], got %d", ErrInvalidParams, p.Name, p.H)
 	}
 	if p.H%p.D != 0 {
 		return fmt.Errorf("%w: %s: h=%d is not a multiple of d=%d", ErrInvalidParams, p.Name, p.H, p.D)
+	}
+	if sh := p.SubtreeHeight(); sh > 32 {
+		return fmt.Errorf("%w: %s: subtree height h/d=%d exceeds 32", ErrInvalidParams, p.Name, sh)
 	}
 	if p.K*p.A+p.H > 256 {
 		return fmt.Errorf("%w: %s: k*a+h = %d exceeds 256", ErrInvalidParams, p.Name, p.K*p.A+p.H)
 	}
 	// Independent recomputation of SIG_SIZE from the SPEC §2 formula,
 	// cross-checked against the composed method calls above so that a
-	// future refactor of the *Params methods can't silently drift.
+	// future refactor of the *Params methods can't silently drift. Every
+	// field read below is now bounds-checked above, so this arithmetic
+	// cannot overflow or divide by zero.
 	n, k, a, d, l, sh := p.N, p.K, p.A, p.D, p.L, p.SubtreeHeight()
 	wantAuthStart := n + k*n
 	wantHTStart := wantAuthStart + (k-1)*a*n

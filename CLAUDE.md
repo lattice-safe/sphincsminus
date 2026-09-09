@@ -14,6 +14,7 @@ byte-compatible with the Solidity verifiers in https://github.com/nconsigny/SPHI
 
 ## Conventions
 * Flat package `sphincsminus` at repo root, like the sibling `lattice-slh-dsa-go`.
+* Go floor is 1.22 for the root module (verified with the real go1.22.12 toolchain); `evmoracle/` needs Go 1.25 because of go-ethereum. Do not use newer stdlib APIs in the root module without raising the floor deliberately.
 * Node values are `[32]byte` words in N_MASK form (top 16 bytes value, low 16 zero).
 * Parameter sets are values of `*Params`; nothing is hard-coded to C13 except defaults.
 * No CGO, no assembly, no external dependencies. Keccak-256 is implemented in `keccak.go` (allocation-free sponge) over the permutation vendored in `keccakf.go` from `golang.org/x/crypto` (BSD, see `LICENSE-THIRD-PARTY`). Hot-path hashes are pinned at 0 allocs/op by tests.

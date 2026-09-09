@@ -1,6 +1,9 @@
 package sphincsminus
 
-import "encoding/binary"
+import (
+	"context"
+	"encoding/binary"
+)
 
 // wotsSecret implements
 // wotsSecret(skSeed, layer, tree, kp, chain) =
@@ -64,14 +67,24 @@ func grindRCandidate(skSeed word, msg word, nonce uint64) word {
 // hot loop in the whole signer that isn't leaf generation, so avoiding an
 // allocation per iteration matters here.
 //
-// err is non-nil only if nonce exhausts the full uint32 space without a
-// hit, which does not happen in practice (the expected number of
-// attempts is 2^a, i.e. at most 2^19 for the parameter sets in this
-// package, many orders of magnitude below 2^32).
-func grindR(p *Params, pkSeed, pkRoot, skSeed, msg word) (r, digest word, err error) {
+// err is non-nil either because nonce exhausts the full uint32 space
+// without a hit (ErrGrindExhausted, which does not happen in practice:
+// the expected number of attempts is 2^a, i.e. at most 2^19 for the
+// parameter sets in this package, many orders of magnitude below 2^32),
+// or because ctx was canceled: ctx.Err() is checked every
+// grindCheckInterval nonces (never per hash), and on cancellation grindR
+// returns that error directly (distinguishable from ErrGrindExhausted by
+// the caller via a direct equality check, since ErrGrindExhausted is
+// never wrapped here).
+func grindR(ctx context.Context, p *Params, pkSeed, pkRoot, skSeed, msg word) (r, digest word, err error) {
 	lastIdxOffset := uint(p.K-1) * uint(p.A)
 	width := uint(p.A)
 	for nonce := uint64(0); nonce <= uint64(^uint32(0)); nonce++ {
+		if nonce%grindCheckInterval == 0 {
+			if err := ctx.Err(); err != nil {
+				return word{}, word{}, err
+			}
+		}
 		cand := grindRCandidate(skSeed, msg, nonce)
 		d := hMsg(pkSeed, pkRoot, cand, msg)
 		if field(&d, lastIdxOffset, width) == 0 {
@@ -94,6 +107,12 @@ func grindR(p *Params, pkSeed, pkRoot, skSeed, msg word) (r, digest word, err er
 func deriveReferenceSeeds(material [32]byte) (pkSeed, skSeed word) {
 	var entropy word
 	hashBytes(&entropy, []byte("sphincs_signer_v1"), material[:])
+	// Best-effort zeroization (SPEC §13): entropy is passed by value into
+	// seedsFromEntropy below, so scrubbing this local copy afterwards
+	// doesn't disturb that call; it just avoids leaving the intermediate
+	// entropy value sitting in this frame's stack slot any longer than
+	// necessary.
+	defer func() { entropy = word{} }()
 	return seedsFromEntropy(entropy)
 }
 
